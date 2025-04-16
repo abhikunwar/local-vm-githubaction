@@ -1,40 +1,34 @@
-name: Build and Deploy Flask App
+name: Deploy Flask Docker to EC2
 
 on:
   push:
-    branches: [main]
+    branches: [ main ]
 
 jobs:
-  build-and-deploy:
+  deploy:
     runs-on: ubuntu-latest
 
     steps:
     - name: Checkout code
       uses: actions/checkout@v3
 
-    - name: Build Docker image
-      run: docker build -t flask-app:latest .
+    - name: Set up SSH key
+      run: |
+        mkdir -p ~/.ssh
+        echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/id_rsa
+        chmod 600 ~/.ssh/id_rsa
+        ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts
 
-    - name: Save image to tar file
-      run: docker save flask-app:latest -o flask-app.tar
+    - name: Copy app to EC2
+      run: |
+        rsync -avz --delete ./ ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:/home/${{ secrets.EC2_USER }}/flask-docker-app
 
-    - name: Copy image to remote server
-      uses: appleboy/scp-action@v0.1.4
-      with:
-        host: ${{ secrets.SERVER_IP }}
-        username: ${{ secrets.SERVER_USER }}
-        key: ${{ secrets.SSH_KEY }}
-        source: "flask-app.tar"
-        target: "~/"
-
-    - name: Deploy and run image on server
-      uses: appleboy/ssh-action@v1.0.0
-      with:
-        host: ${{ secrets.SERVER_IP }}
-        username: ${{ secrets.SERVER_USER }}
-        key: ${{ secrets.SSH_KEY }}
-        script: |
-          docker load -i flask-app.tar
-          docker stop flask-container || true
-          docker rm flask-container || true
-          docker run -d --name flask-container -p 80:5000 flask-app:latest
+    - name: Build & Run Docker on EC2
+      run: |
+        ssh ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} << 'EOF'
+          cd flask-docker-app
+          docker stop flask-app || true
+          docker rm flask-app || true
+          docker build -t flask-docker-app .
+          docker run -d --name flask-app -p 5000:5000 flask-docker-app
+        EOF
